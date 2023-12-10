@@ -73,11 +73,11 @@ val Rotations = arrayOf(
         intArrayOf(24,35,1,46)
     ), // bottom
     RotateOp(
-        intArrayOf(25,27,32,30),
-        intArrayOf(26,29,31,28),
-        intArrayOf(19,33,6,48),
-        intArrayOf(21,34,4,47),
-        intArrayOf(24,35,1,46)
+        intArrayOf(33,35,40,38),
+        intArrayOf(34,37,39,36),
+        intArrayOf(25,17,9,1),
+        intArrayOf(26,18,10,2),
+        intArrayOf(27,19,11,3)
     ), // up
     RotateOp(
         intArrayOf(41,43,48,46),
@@ -110,6 +110,8 @@ class AppState {
 
     val ops = mutableStateOf(0)
     var searchStatus = mutableStateOf(SearchStatus.None)
+    var status = mutableStateOf("")
+
     constructor() {
         tiles = Array(48) { index ->
             CubeTile(colorFor(index))
@@ -138,6 +140,7 @@ class AppState {
         ops.value = 0
         searchStatus.value = SearchStatus.None
         seen.clear()
+        status.value = ""
     }
 
     private fun colorFor(index: Int): CubeTileColor {
@@ -161,27 +164,31 @@ class AppState {
     }
 
     val history = mutableListOf<Side>()
-    val seen = mutableSetOf<Int>()
+    val seen = mutableSetOf<Long>()
     fun turn(side: Side, save: Boolean) {
-        val rotate = Rotations[side.ordinal]
         getRaw(tilesRaw)
-        for (shift in rotate.ops) {
-            applyShift(shift, tilesRaw)
-        }
-        val newHash = getPositionHash(tilesRaw)
-        if (seen.contains(newHash))
-            return
-        seen.add(newHash)
+        turnRaw(side, tilesRaw, false)
         applyRaw(tilesRaw)
-        if (save) {
-            history.add(side)
-        }
+        if (save) history.add(side)
     }
 
-    fun getPositionHash(raw: IntArray): Int {
-        var result = 17
+    fun turnRaw(side: Side, raw: IntArray, updateSeen: Boolean): Boolean {
+        val rotate = Rotations[side.ordinal]
+        for (shift in rotate.ops) {
+            applyShift(shift, raw)
+        }
+        if (updateSeen) {
+            val newHash = getPositionHash(raw)
+            if (seen.contains(newHash)) return false
+            seen.add(newHash)
+        }
+        return true
+    }
+
+    private fun getPositionHash(raw: IntArray): Long {
+        var result = 17L
         raw.forEachIndexed { index, value ->
-            result = result * 11 + result xor (1701 * (index + 1) * (value + 1))
+            result = result * 11 + result xor ((1701L + index) * value)
         }
         return result
     }
@@ -200,13 +207,30 @@ class AppState {
         scope.launch {
             withContext(Dispatchers.IO) {
                 val rng = Random(System.currentTimeMillis())
+                val tiles = IntArray(48)
+                val tiles2 = IntArray(48)
+                getRaw(tiles)
+                val log = mutableListOf<Side>()
                 while (searchStatus.value == SearchStatus.Started) {
-                    if (isDone()) break
-                    val side = Side.values()[rng.nextInt(1, 6)]
-                    turn(side, true)
-                    //delay(100)
-                    ops.value++
+                    if (isDone(tiles)) {
+                        status.value = "Found in ${log.size}"
+                        println(log)
+                        break
+                    }
+                    val side = Side.values()[rng.nextInt(0, 6)]
+                    tiles.copyInto(tiles2)
+                    if (turnRaw(side, tiles2, true)) {
+                        log.add(side)
+                        tiles2.copyInto(tiles)
+                        if (true) {
+                            status.value = side.toString()
+                            applyRaw(tiles)
+                            delay(500)
+                        }
+                        ops.value++
+                    }
                 }
+
                 searchStatus.value = SearchStatus.None
             }
         }
@@ -215,9 +239,9 @@ class AppState {
     fun stopSearch() {
         searchStatus.value = SearchStatus.Cancelling
     }
-    fun isDone(): Boolean {
+    fun isDone(tiles: IntArray): Boolean {
         tiles.forEachIndexed { index, value ->
-            if (value.color != colorFor(index)) return false
+            if (value != index / 8) return false
         }
         return true
     }
@@ -240,7 +264,7 @@ fun CubeSide(state: AppState, side: Side) {
     Column(Modifier.clickable {
         state.turn(side, true)
     }) {
-        Text(side.toString())
+        // Text(side.toString())
         for (row in 0 .. 2) {
             CubeRow(state, side, row)
         }
@@ -269,7 +293,7 @@ fun CubeTile(tile: CubeTileColor, index: String) {
         .background(tile.color)
         .border(BorderStroke(1.dp, Color.Black))
     ) {
-        Text(index)
+        Text(index, Modifier.align(Alignment.Center))
     }
 }
 
@@ -279,6 +303,7 @@ fun Rubik(state: AppState) {
     val coroutineScope = rememberCoroutineScope()
 
     Column {
+        Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth().height(40.dp)) {
             Spacer(Modifier.width(10.dp))
             Button({
@@ -302,12 +327,25 @@ fun Rubik(state: AppState) {
                 Text(if (state.searchStatus.value == SearchStatus.Started) "Stop"  else "Search")
             }
             Spacer(Modifier.width(10.dp))
-            Text("${state.ops.value} ops", Modifier.align(Alignment.CenterVertically))
-
+            Text("${state.ops.value} ops, ${state.seen.size} seen", Modifier.align(Alignment.CenterVertically))
+            Spacer(Modifier.width(10.dp))
+            Text(state.status.value, color =  Color.Red, modifier = Modifier.align(Alignment.CenterVertically))
         }
         Row(Modifier.fillMaxSize()) {
-            for (side in Side.values()) {
-                CubeSide(state, side)
+            Column {
+                Row {
+                    Spacer(Modifier.width(180.dp))
+                    CubeSide(state, Side.Up)
+                }
+                Row {
+                    for (side in arrayOf(Side.Left, Side.Front, Side.Right, Side.Back)) {
+                        CubeSide(state, side)
+                    }
+                }
+                Row {
+                    Spacer(Modifier.width(180.dp))
+                    CubeSide(state, Side.Down)
+                }
             }
         }
     }
@@ -328,7 +366,7 @@ fun App() {
 
 fun main() = application {
     Window(onCloseRequest = ::exitApplication,
-        state = WindowState(width = 1100.dp, height = 300.dp),
+        state = WindowState(width = 760.dp, height = 600.dp),
         resizable = false
     ) {
         App()
